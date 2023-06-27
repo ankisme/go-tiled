@@ -89,3 +89,13 @@ func (g *Group) DecodeGroup(m *Map) error {
 
 	return nil
 }
+
+func (g *Group) GetLayerByName(name string) *Layer {
+	for _, layer := range g.Layers {
+		if layer.Name == name {
+			return layer
+		}
+	}
+
+	return nil
+}

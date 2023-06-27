@@ -45,7 +45,7 @@ type LayerTile struct {
 	// Tile ID
 	ID uint32
 	// Tile tileset
-	Tileset *Tileset
+	Tileset *Tileset `json:"-"`
 	// Horizontal tile image flip
 	HorizontalFlip bool
 	// Vertical tile image flip
@@ -53,7 +53,12 @@ type LayerTile struct {
 	// Diagonal tile image flip
 	DiagonalFlip bool
 	// Tile is nil
-	Nil bool
+	Nil       bool
+	X         int
+	Y         int
+	XInChunk  int
+	YInChunk  int
+	TileAsset *TilesetTile `json:"-"`
 }
 
 // IsNil returs if tile is nil
@@ -63,7 +68,7 @@ func (t *LayerTile) IsNil() bool {
 
 // Layer is a map layer
 type Layer struct {
-	_map *Map
+	_map *Map `xml:"-"`
 	// Unique ID of the layer.
 	// Each layer that added to a map gets a unique id. Even if a layer is deleted,
 	// no layer ever gets the same ID. Can not be changed in Tiled. (since Tiled 1.2)
@@ -86,6 +91,11 @@ type Layer struct {
 	Tiles []*LayerTile
 	// Data
 	data *Data
+
+	Chunks []*Chunk
+
+	Border *Border
+
 	// Set when all entries of the layer are NilTile
 	empty bool
 }
@@ -171,10 +181,14 @@ func (l *Layer) decodeTiles() error {
 
 	l.Tiles = make([]*LayerTile, len(gids))
 	for j := 0; j < len(l.Tiles); j++ {
-		l.Tiles[j], err = l._map.TileGIDToTile(gids[j])
-		if err != nil {
-			return err
+		tile, findError := l._map.TileGIDToTile(gids[j])
+		if findError != nil {
+			return findError
 		}
+
+		tile.X = j % l._map.Width
+		tile.Y = j / l._map.Width
+		l.Tiles[j] = tile
 	}
 
 	return nil
@@ -187,24 +201,65 @@ func (l *Layer) DecodeLayer(m *Map) error {
 		return ErrEmptyLayerData
 	}
 
-	if err := l.decodeTiles(); err != nil {
-		return err
+	if !l._map.IsInfinite {
+		if err := l.decodeTiles(); err != nil {
+			return err
+		}
+	} else {
+		for _, chunk := range l.Chunks {
+			if err := chunk.DecodeChunk(l); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (l *Layer) ParseLayerInInfiniteMode(m *Map) error {
+	size := l._map.Width * l._map.Height
+	l.Tiles = make([]*LayerTile, size)
+
+	for _, chunk := range l.Chunks {
+		for _, tile := range chunk.Tiles {
+			index := tile.Y*l._map.Width + tile.X
+			if index >= size {
+				continue
+			}
+
+			l.Tiles[index] = tile
+		}
+	}
+
+	zeroTile, findError := l._map.TileGIDToTile(0)
+	if findError != nil {
+		return findError
+	}
+
+	for i, tile := range l.Tiles {
+		if tile != nil {
+			continue
+		}
+
+		l.Tiles[i] = zeroTile
 	}
 
 	// Data is not needed anymore
 	l.data = nil
+	l.empty = l.IsEmptySlowly()
+	l.Border = l.ComputeBorder()
+	return nil
+}
 
+func (l *Layer) IsEmptySlowly() bool {
 	for i := 0; i < len(l.Tiles); i++ {
 		tile := l.Tiles[i]
 		if !tile.Nil {
-			l.empty = false
-			return nil
+			return false
 		}
 	}
 
-	l.empty = true
-
-	return nil
+	return true
 }
 
 // UnmarshalXML decodes a single XML element beginning with the given start element.
@@ -217,8 +272,8 @@ func (l *Layer) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	}
 
 	*l = (Layer)(item.internalLayer)
-	l.data = item.Data
-
+	l.data = &item.Data.Data
+	l.Chunks = item.Data.Chunks
 	return nil
 }
 
@@ -232,4 +287,41 @@ func (l *Layer) GetTilePosition(tileID int) (int, int) {
 // GetTileRect returns the rectangle that contains the Tile in the original Tileset.Image
 func (t *LayerTile) GetTileRect() image.Rectangle {
 	return t.Tileset.GetTileRect(t.ID)
+}
+
+func (l *Layer) ComputeBorder() *Border {
+	firstTile := l.Tiles[0]
+	minX := firstTile.X
+	maxX := firstTile.X
+	minY := firstTile.Y
+	maxY := firstTile.Y
+
+	for _, tile := range l.Tiles {
+		if tile.X < minX {
+			minX = tile.X
+		}
+
+		if tile.X > maxX {
+			maxX = tile.X
+		}
+
+		if tile.Y < minY {
+			minY = tile.Y
+		}
+
+		if tile.Y > maxY {
+			maxY = tile.Y
+		}
+	}
+
+	border := &Border{
+		MinX:   minX,
+		MinY:   minY,
+		MaxX:   maxX,
+		MaxY:   maxY,
+		Width:  maxX - minX + 1,
+		Height: maxY - minY + 1,
+	}
+	border.Square = border.Width * border.Height
+	return border
 }

@@ -25,6 +25,17 @@ type internalLayer Layer
 type aliasLayer struct {
 	internalLayer
 	// Layer data in raw format
+	Data *aliasData `xml:"data"`
+}
+type internalData Data
+type aliasData struct {
+	Data
+	Chunks []*Chunk `xml:"chunk"`
+}
+type internalChunk Chunk
+type aliasChunk struct {
+	internalChunk
+	// Layer data in raw format
 	Data *Data `xml:"data"`
 }
 type aliasMap Map
